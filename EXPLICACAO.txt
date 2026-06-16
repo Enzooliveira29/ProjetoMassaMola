@@ -1,0 +1,430 @@
+====================================================================
+   SIMULADOR DE TECIDO (MODELO MASSA-MOLA) - GUIA DE ENTENDIMENTO
+====================================================================
+
+Este documento explica, em linguagem simples E COM OS TRECHOS DE
+CODIGO, o que foi feito no projeto: quais defeitos existiam, como
+foram corrigidos, como cada etapa foi implementada, o que e o "Euler
+explicito" e como ler as tabelas (a planilha de vizinhanca).
+
+Convencao: os trechos de codigo aparecem indentados, com um titulo
+   --- codigo: arquivo.py (funcao) ---
+Nos defeitos voce vera [ANTES] (com o problema) e [DEPOIS] (corrigido).
+
+
+--------------------------------------------------------------------
+1. A IDEIA DO PROJETO (em uma frase)
+--------------------------------------------------------------------
+
+Imagine um pedaco de pano como uma rede de "bolinhas" (os VERTICES,
+que tem massa) ligadas por "elasticos" (as MOLAS). A gravidade puxa
+as bolinhas para baixo; as molas tentam manter o pano inteiro. O
+computador calcula, passo a passo no tempo, como tudo isso se move.
+
+  - VERTICE  = um ponto com massa            (vertex.py)
+  - MOLA     = liga dois vertices e reage    (spring.py)
+  - CLOTH    = a malha inteira: monta, soma forcas e avanca no tempo
+                                              (cloth.py)
+
+
+--------------------------------------------------------------------
+2. OS DEFEITOS QUE EXISTIAM E COMO FORAM CORRIGIDOS
+--------------------------------------------------------------------
+
+A versao inicial rodava, mas o pano apenas CAIA reto. Encontramos 5
+problemas.
+
+....................................................................
+DEFEITO 1 - As molas nunca eram criadas
+....................................................................
+  Sintoma : o pano caia em queda livre, sem se comportar como tecido.
+  Causa   : a funcao que monta a grade criava os vertices, mas NUNCA
+            criava as molas. A lista de molas ficava vazia.
+
+  [ANTES] --- codigo: cloth.py (build_grid) ---
+
+      def build_grid(self, rows, cols, spacing=1.0):
+          for i in range(rows):
+              for j in range(cols):
+                  position = [j * spacing, -i * spacing, 0]
+                  fixed = (i == 0)
+                  vertex = Vertex(len(self.vertices), position, fixed=fixed)
+                  self.vertices.append(vertex)
+          # ...e acabava aqui. self.springs continuava []  <-- problema
+
+  Explicacao: so cria vertices. Sem molas, nada liga as bolinhas;
+  logo so a gravidade age e tudo cai junto.
+
+  Solucao : criamos build_springs(), que percorre a grade e liga cada
+            vertice aos vizinhos. Usamos "offsets para frente" (so
+            direita/baixo/diagonais para baixo) para nao criar a mesma
+            mola duas vezes.
+
+  [DEPOIS] --- codigo: cloth.py (build_springs) ---
+
+      FORWARD_OFFSETS_BY_TYPE = {
+          SpringType.STRUCTURAL: [(0, 1), (1, 0)],     # direita, baixo
+          SpringType.SHEAR:      [(1, 1), (1, -1)],    # diagonais p/ baixo
+          SpringType.BENDING:    [(0, 2), (2, 0)],     # 2 casas: dir, baixo
+      }
+
+      def build_springs(self, stiffness, damping):
+          for i in range(self.rows):
+              for j in range(self.cols):
+                  for stype, offsets in FORWARD_OFFSETS_BY_TYPE.items():
+                      for di, dj in offsets:
+                          ni, nj = i + di, j + dj
+                          if self.in_bounds(ni, nj):     # nao sai da grade
+                              self.springs.append(Spring(
+                                  self.vertices[self.index(i, j)],
+                                  self.vertices[self.index(ni, nj)],
+                                  stiffness, damping, stype))
+
+  Explicacao linha a linha:
+    - para cada vertice (i, j), olhamos os deslocamentos (di, dj);
+    - (ni, nj) e a posicao do vizinho;
+    - in_bounds() garante que o vizinho existe (resolve as bordas);
+    - se existe, criamos uma Spring entre os dois.
+
+....................................................................
+DEFEITO 2 - Sinal da forca da mola invertido (o pano "explodia")
+....................................................................
+  Sintoma : ao ligar as molas, os numeros viravam infinito (NaN).
+  Causa   : a forca estava com o SINAL TROCADO: em vez de PUXAR os
+            vertices um para o outro (elastico), ela EMPURRAVA para
+            longe. Quanto mais longe, mais empurrava -> explodia.
+            (Esse erro estava escondido porque, sem molas - Defeito 1,
+            ele nunca era executado.)
+
+  [ANTES] --- codigo: spring.py (apply_force) ---
+
+      direction = delta / length          # aponta de v1 para v2
+      deformation = length - self.rest_length
+
+      elastic_force = -self.stiffness * deformation * direction
+      self.v1.force += elastic_force
+      self.v2.force -= elastic_force
+
+  Por que esta errado? Quando a mola estica, "deformation" e positivo.
+  Com o sinal de MENOS, "elastic_force" aponta de v2 para v1; ao somar
+  em v1, empurramos v1 para LONGE de v2 (deveria PUXAR para perto).
+
+  [DEPOIS] --- codigo: spring.py (apply_force) ---
+
+      direction = delta / length          # aponta de v1 para v2
+      deformation = length - self.rest_length
+
+      elastic = (self.stiffness * deformation) * direction   # SEM o menos
+      self.v1.forces[bucket] += elastic    # v1 puxado em direcao a v2
+      self.v2.forces[bucket] -= elastic    # v2 puxado em direcao a v1
+
+  Explicacao: a unica mudanca essencial foi tirar o sinal de menos
+  ( -self.stiffness  ->  self.stiffness ). Agora, ao esticar, a forca
+  PUXA os dois vertices um para o outro - como um elastico de verdade.
+  (Usamos "forces[bucket]" no lugar de "force" por causa da Etapa 1,
+  que separa a forca por tipo - explicado na secao 3.)
+
+....................................................................
+DEFEITO 3 - O integrador nao era "Euler explicito"
+....................................................................
+  Causa   : o codigo atualizava a velocidade e JA usava essa
+            velocidade nova para mover o vertice. Isso e o Euler
+            SEMI-implicito, nao o explicito.
+
+  [ANTES] --- codigo: cloth.py (integrate) ---
+
+      vertex.velocity += vertex.acceleration * dt   # 1) velocidade nova
+      vertex.position += vertex.velocity * dt        # 2) usa a velocidade
+                                                     #    JA nova -> semi-impl.
+
+  Solucao : implementamos os DOIS metodos (ver secao 5). O codigo
+            corrigido permite escolher; o padrao e o Euler explicito.
+
+....................................................................
+DEFEITO 4 - O amortecimento existia mas era ignorado
+....................................................................
+  Causa   : a mola guardava um valor "damping", mas a conta da forca
+            nunca o usava.
+  Solucao : adicionamos o termo de amortecimento na forca da mola.
+
+  [DEPOIS] --- codigo: spring.py (apply_force) ---
+
+      relative_velocity = self.v2.velocity - self.v1.velocity
+      damping = (self.damping * np.dot(relative_velocity, direction)) * direction
+      self.v1.forces["amortecimento"] += damping
+      self.v2.forces["amortecimento"] -= damping
+
+  Explicacao: medimos a velocidade COM QUE os dois vertices se
+  afastam/aproximam (a projecao da velocidade relativa na direcao da
+  mola) e criamos uma forca contraria a esse movimento. E como o
+  amortecedor de um carro: tira energia e acalma as oscilacoes.
+
+....................................................................
+DEFEITO 5 - Lista de dependencias vazia
+....................................................................
+  Causa   : requirements.txt estava em branco.
+  Solucao : listamos numpy e matplotlib.
+
+
+--------------------------------------------------------------------
+3. COMO CADA ETAPA DO PROJETO FOI IMPLEMENTADA
+--------------------------------------------------------------------
+
+ETAPA 1 - Calcular E visualizar as forcas de cada vertice
+  Cada vertice guarda a forca SEPARADA por origem. Em vez de um unico
+  "force", usamos um dicionario "forces".
+
+  --- codigo: vertex.py ---
+
+      FORCE_COMPONENTS = ("gravidade", "estrutural", "cisalhamento",
+                          "flexao", "amortecimento")
+
+      self.forces = {name: np.zeros(3) for name in FORCE_COMPONENTS}
+
+      @property
+      def force_total(self):                 # a forca total e a soma
+          total = np.zeros(3)                # das partes
+          for f in self.forces.values():
+              total += f
+          return total
+
+  Assim conseguimos analisar "quanto a gravidade puxa vs. quanto as
+  molas seguram". Para VER: python visualize.py forces (setas verdes =
+  gravidade; setas laranjas = molas).
+
+ETAPA 2 - Vizinhanca de cada vertice
+  Definimos os vizinhos em UM unico lugar (fonte unica de verdade) e
+  preenchemos a vizinhanca de cada vertice a partir dela.
+
+  --- codigo: cloth.py ---
+
+      STRUCTURAL_OFFSETS = [(-1, 0), (1, 0), (0, -1), (0, 1)]   # 4 lados
+      SHEAR_OFFSETS      = [(-1,-1), (-1,1), (1,-1), (1,1)]     # 4 diagonais
+      BENDING_OFFSETS    = [(-2, 0), (2, 0), (0, -2), (0, 2)]   # a 2 casas
+
+      def build_neighborhoods(self):
+          for i in range(self.rows):
+              for j in range(self.cols):
+                  v = self.vertices[self.index(i, j)]
+                  v.neighbors = {}
+                  for stype, offsets in OFFSETS_BY_TYPE.items():
+                      v.neighbors[stype] = [
+                          self.vertices[self.index(i + di, j + dj)]
+                          for di, dj in offsets
+                          if self.in_bounds(i + di, j + dj)   # ignora quem
+                      ]                                       # sai da grade
+
+  Explicacao: para cada vertice, guardamos a lista de vizinhos de cada
+  tipo. O "if in_bounds" e o que faz canto/borda/interno terem
+  quantidades diferentes de vizinhos, automaticamente.
+
+ETAPA 3 - Euler explicito (e o semi-implicito para comparar)
+  Implementado em integrate(). Codigo e explicacao na secao 5.
+
+ETAPA 4 - Amortecimento (damping)
+  Implementado na forca da mola (ver Defeito 4, acima).
+
+ETAPA 5 - Tipos de vertice: interno, borda e canto
+  Uma funcao decide o tipo contando em quantas margens o vertice
+  encosta.
+
+  --- codigo: cloth.py (classify) ---
+
+      def classify(self, i, j):
+          bordas = sum([i == 0, i == self.rows - 1,
+                        j == 0, j == self.cols - 1])
+          return {2: "canto", 1: "borda"}.get(bordas, "interno")
+
+  Explicacao: cada teste (i == 0, etc.) vale True/False; somando, temos
+  quantas margens o vertice toca. 2 margens = canto, 1 = borda, 0 =
+  interno.
+
+  Extra: damos a cada vertice uma MASSA proporcional a area que ele
+  representa (a beirada "pesa" menos que o miolo):
+
+  --- codigo: cloth.py (build_grid) ---
+
+      area_mass = {"interno": mass, "borda": mass/2.0, "canto": mass/4.0}
+      # ...
+      vertex = Vertex(..., mass=area_mass[tipo], ...)
+
+ETAPA 6 - A planilha de referencia
+  Geramos automaticamente uma tabela com a vizinhanca de cada vertice.
+
+  --- codigo: cloth.py (export_reference_table) ---
+
+      def export_reference_table(self, path="vizinhanca.csv"):
+          with open(path, "w", newline="", encoding="utf-8") as f:
+              w = csv.writer(f)
+              w.writerow(["id","i","j","tipo",
+                          "n_estrutural","n_cisalhamento","n_flexao","total"])
+              for v in self.vertices:
+                  e = len(v.neighbors[SpringType.STRUCTURAL])
+                  s = len(v.neighbors[SpringType.SHEAR])
+                  b = len(v.neighbors[SpringType.BENDING])
+                  w.writerow([v.id, v.i, v.j, v.tipo, e, s, b, e+s+b])
+          return path
+
+  Explicacao: percorremos todos os vertices e, para cada um, contamos
+  quantos vizinhos ele tem de cada tipo (len(...)), gravando uma linha
+  no arquivo CSV. Como e gerada pelo codigo, a planilha esta sempre
+  correta. Detalhes de leitura na secao 6.
+
+
+--------------------------------------------------------------------
+4. OS TRES TIPOS DE MOLA (a fisica do tecido)
+--------------------------------------------------------------------
+
+  ESTRUTURAL  - liga vizinhos diretos (cima/baixo/esquerda/direita).
+                Mantem a forma basica (nao deixa esticar demais).
+  CISALHAMENTO (shear) - liga as diagonais. Impede que os quadradinhos
+                "amassem" para o lado (efeito tesoura).
+  FLEXAO (bending) - liga vertices a DUAS casas. Controla o quanto o
+                pano dobra/enruga. Por alcancar 2 casas, ela explica
+                uma sutileza nas tabelas (secao 6).
+
+Como a forca de cada mola e calculada (resumo do apply_force):
+
+  --- codigo: spring.py (apply_force) ---
+
+      delta = self.v2.position - self.v1.position   # vetor entre eles
+      length = np.linalg.norm(delta)                # distancia atual
+      direction = delta / length                    # so a direcao
+      deformation = length - self.rest_length       # +estica / -comprime
+
+      elastic = (self.stiffness * deformation) * direction   # lei de Hooke
+      # + termo de amortecimento (ver Defeito 4)
+
+  Explicacao: "deformation" diz o quanto a mola saiu do tamanho de
+  repouso (rest_length). A forca elastica e proporcional a essa
+  deformacao (lei de Hooke: F = k * deformacao) e aponta na direcao da
+  mola.
+
+
+--------------------------------------------------------------------
+5. O QUE E O "EULER EXPLICITO" (explicacao simples)
+--------------------------------------------------------------------
+
+A simulacao avanca em pequenos saltos de tempo "dt" (ex.: 0,005 s). Em
+cada salto: 1) somamos as forcas; 2) aceleracao = forca / massa;
+3) atualizamos velocidade e posicao. A pergunta-chave do passo 3 e:
+qual velocidade usar para mover o vertice?
+
+  --- codigo: cloth.py (integrate) ---
+
+      def integrate(self, dt, metodo="explicito"):
+          for vertex in self.vertices:
+              if vertex.fixed:                       # o topo fica preso
+                  continue
+              vertex.acceleration = vertex.force_total / vertex.mass
+
+              if metodo == "explicito":
+                  # move usando a velocidade ANTIGA, depois atualiza a velocidade
+                  vertex.position = vertex.position + vertex.velocity * dt
+                  vertex.velocity = vertex.velocity + vertex.acceleration * dt
+              else:
+                  # semi-implicito: atualiza a velocidade e usa a NOVA p/ mover
+                  vertex.velocity = vertex.velocity + vertex.acceleration * dt
+                  vertex.position = vertex.position + vertex.velocity * dt
+
+Diferenca (parece boba, mas muda tudo):
+
+  EULER EXPLICITO  -> a posicao usa a velocidade ANTIGA (o que o
+                      enunciado pede).
+  EULER SEMI-IMPL. -> a posicao usa a velocidade JA NOVA (era o que o
+                      codigo fazia "sem querer").
+
+Por que o explicito pode "explodir"?
+  Ele tende a ADICIONAR um pouquinho de energia falsa a cada passo
+  (erro do metodo). Sem nada para tirar essa energia, o pano vibra
+  cada vez mais ate os numeros virarem infinito.
+  -> No teste SEM amortecimento, ele explodiu no passo 653.
+
+Como segurar? Com amortecimento E passo pequeno. A regra e:
+
+                    dt  <=  c / k
+
+     k = rigidez da mola (quao dura)   |   c = amortecimento (quanto freia)
+
+  Intuicao: molas mais duras (k grande) -> precisa de passo menor;
+  mais amortecimento (c grande) -> permite passo maior.
+
+  Conferimos: com k = 80 e c = 0,8 (c/k = 0,01), fica estavel ate
+  dt = 0,010 e EXPLODE em dt = 0,012 - exatamente o previsto. O padrao
+  do projeto usa dt = 0,005 (folga de 2x). O semi-implicito aguenta
+  passos bem maiores (rode: python visualize.py semi).
+
+
+--------------------------------------------------------------------
+6. AS TABELAS (A PLANILHA DE VIZINHANCA)
+--------------------------------------------------------------------
+
+A "planilha" responde: para cada vertice, QUANTAS e QUAIS molas saem
+dele, por tipo. Gere com:  python planilha.py
+
+Sao 3 arquivos:
+  vizinhanca.csv          -> a planilha completa (1 vertice por linha).
+  planilha_tabela.png     -> a tabela resumida (imagem).
+  planilha_diagramas.png  -> os desenhos explicativos (imagem).
+
+--- A TABELA RESUMIDA ---
+
+   tipo     estrutural  cisalhamento  flexao  total  qtd
+   canto        2            1           2      5      4
+   borda        3            2           3      8     24
+   borda        3            2           2      7      8
+   interno      4            4           4     12     36
+   interno      4            4           3     11     24
+   interno      4            4           2     10      4
+
+Como ler:
+  - tipo: canto, borda ou interno.
+  - as 3 colunas do meio: quantas molas de cada tipo o vertice tem.
+  - total: a soma.   - qtd: quantos vertices tem essa assinatura.
+
+Por que ha MAIS de uma linha "interno"/"borda"?
+  Por causa da mola de FLEXAO, que alcanca 2 casas. Um vertice no
+  miolo profundo tem os 4 vizinhos de flexao (total 12). Um "interno"
+  a apenas 1 casa da margem nao cabe todas e fica com 11 ou 10. A
+  planilha mostra isso sozinha - sinal de que as margens sao tratadas
+  corretamente.
+
+Numeros "cheios" (malha grande):
+  interno = 4+4+4 = 12   |   borda = 3+2+3 = 8   |   canto = 2+1+2 = 5
+
+--- OS DESENHOS (planilha_diagramas.png) ---
+  1) Mapa de tipos: a malha colorida (interno=azul, borda=laranja,
+     canto=vermelho).
+  2) Tres diagramas (canto/borda/interno): o vertice central em PRETO
+     e as molas saindo dele, coloridas: azul=estrutural,
+     verde=cisalhamento, laranja=flexao.
+
+--- O CSV (vizinhanca.csv) ---
+  Uma linha por vertice: id, i, j, tipo, n_estrutural, n_cisalhamento,
+  n_flexao, total  (i = linha, j = coluna). Abre no Excel/Sheets.
+
+
+--------------------------------------------------------------------
+7. ARQUIVOS DO PROJETO E COMO RODAR
+--------------------------------------------------------------------
+
+  vertex.py     -> o vertice (massa, posicao, forcas separadas, tipo)
+  spring.py     -> a mola (forca elastica + amortecimento, 3 tipos)
+  cloth.py      -> a malha (monta, calcula forcas, integra no tempo)
+  main.py       -> demonstracao no terminal
+  visualize.py  -> animacao do tecido
+  planilha.py   -> gera e mostra a planilha de vizinhanca
+
+Para rodar:
+
+  pip install -r requirements.txt   (instala numpy e matplotlib)
+
+  python main.py                 -> numeros no terminal + gera o CSV
+  python visualize.py            -> animacao do tecido
+  python visualize.py forces     -> animacao COM as setas de forca
+  python visualize.py semi       -> usa o Euler semi-implicito
+  python planilha.py             -> gera a planilha + as imagens
+
+====================================================================
+   FIM
+====================================================================

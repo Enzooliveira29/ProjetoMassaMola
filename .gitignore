@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+
+# Artefatos gerados pelos scripts (reproduziveis)
+vizinhanca.csv
+*.png
+*.gif
