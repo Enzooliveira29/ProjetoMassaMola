@@ -74,7 +74,8 @@ dt ≤ c / k
 ou seja, **sem amortecimento o Euler explícito é sempre instável**. Por isso o
 amortecimento não é só estético: é necessário para estabilizar a integração.
 
-Parâmetros padrão: `k = 80`, `c = 0,8`, `dt = 0,005` → `c/k = 0,01`, com margem
-de segurança de 2×. O `integrate` também oferece o **Euler semi-implícito**
-(`metodo="semi"`), que é muito mais estável — útil para comparar os dois
-métodos no relatório.
+Parâmetros padrão: `k = 400`, `c = 4,0`, `dt = 0,0015` → `c/k = 0,01`, com
+margem de segurança de ~6×. Esses valores foram calibrados para um tecido mais
+firme (estica ~1,2× a altura natural) e que **assenta** sem ficar oscilando.
+O `integrate` também oferece o **Euler semi-implícito** (`metodo="semi"`), que
+é muito mais estável — útil para comparar os dois métodos no relatório.

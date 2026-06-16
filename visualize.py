@@ -15,10 +15,10 @@ METODO = "semi" if "semi" in mode else "explicito"
 
 # --- Monta o tecido ---
 cloth = Cloth()
-cloth.build_grid(rows=10, cols=10, spacing=0.1, stiffness=80.0, damping=0.8)
+cloth.build_grid(rows=10, cols=10, spacing=0.1, stiffness=400.0, damping=4.0)
 
-DT = 0.005
-SUBSTEPS = 4  # passos de fisica por quadro
+DT = 0.0015
+SUBSTEPS = 12  # passos de fisica por quadro
 
 # --- Figura ---
 fig, ax = plt.subplots(figsize=(7, 7))

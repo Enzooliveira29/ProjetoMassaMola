@@ -349,10 +349,17 @@ Como segurar? Com amortecimento E passo pequeno. A regra e:
   Intuicao: molas mais duras (k grande) -> precisa de passo menor;
   mais amortecimento (c grande) -> permite passo maior.
 
-  Conferimos: com k = 80 e c = 0,8 (c/k = 0,01), fica estavel ate
-  dt = 0,010 e EXPLODE em dt = 0,012 - exatamente o previsto. O padrao
-  do projeto usa dt = 0,005 (folga de 2x). O semi-implicito aguenta
-  passos bem maiores (rode: python visualize.py semi).
+  Conferimos com um teste: com k = 80 e c = 0,8 (c/k = 0,01), fica
+  estavel ate dt = 0,010 e EXPLODE em dt = 0,012 - exatamente o
+  previsto pela regra.
+
+  O projeto foi CALIBRADO para um tecido mais firme (menos elastico) e
+  que assenta sem ficar balancando. Valores padrao atuais:
+        k = 400 ,  c = 4,0 ,  dt = 0,0015   (c/k = 0,01, folga de ~6x)
+  Rigidez maior (k) deixa o pano menos esticado; para o Euler explicito
+  aguentar essa rigidez, foi preciso diminuir o passo dt e aumentar o
+  amortecimento c, sempre respeitando dt <= c/k. O semi-implicito
+  aguenta passos bem maiores (rode: python visualize.py semi).
 
 
 --------------------------------------------------------------------

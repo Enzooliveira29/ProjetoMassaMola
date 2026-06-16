@@ -52,7 +52,7 @@ class Cloth:
 
     # ---- construcao da malha ----------------------------------------------
     def build_grid(self, rows, cols, spacing=1.0,
-                   stiffness=80.0, damping=0.8, mass=1.0):
+                   stiffness=400.0, damping=4.0, mass=1.0):
         self.rows = rows
         self.cols = cols
         self.spacing = spacing

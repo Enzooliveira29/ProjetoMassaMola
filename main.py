@@ -5,7 +5,7 @@ from spring import SpringType
 # Demonstracao das etapas implementadas no simulador massa-mola.
 # ---------------------------------------------------------------------------
 ROWS, COLS, SPACING = 10, 10, 0.1
-STIFFNESS, DAMPING, DT = 80.0, 0.8, 0.005
+STIFFNESS, DAMPING, DT = 400.0, 4.0, 0.0015
 
 cloth = Cloth()
 cloth.build_grid(ROWS, COLS, spacing=SPACING,
@@ -32,7 +32,7 @@ print(f"\n-> Planilha de vizinhanca exportada para '{path}' "
 # ---- Itens 3 e 4: integracao (Euler explicito) + amortecimento ------------
 print(f"\n== Simulacao: Euler explicito | dt={DT}, k={STIFFNESS}, c={DAMPING} "
       f"(estavel se dt <= c/k = {DAMPING / STIFFNESS:.4f}) ==")
-PASSOS = 300
+PASSOS = 4000
 for _ in range(PASSOS):
     cloth.update(DT, metodo="explicito")
 
