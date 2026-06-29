@@ -1,14 +1,15 @@
 import numpy as np
 
 # Componentes em que a forca resultante sobre o vertice e decomposta.
-# Permite analisar a contribuicao individual da gravidade e de cada tipo
-# de mola (item 1 das proximas etapas).
+# Permite analisar a contribuicao individual da gravidade, da resistencia
+# do ar e de cada tipo de mola (item 1 das proximas etapas).
 FORCE_COMPONENTS = (
     "gravidade",
     "estrutural",
     "cisalhamento",
     "flexao",
     "amortecimento",
+    "ar",
 )
 
 
@@ -28,6 +29,10 @@ class Vertex:
 
         self.mass = mass
         self.fixed = fixed
+
+        # Coeficiente de arrasto do ar (C^res, Eq. 4.5). Depende do tipo do
+        # vertice (canto/borda/interno) e e definido por Cloth.build_grid.
+        self.air_drag = 0.0
 
         # Vizinhanca por tipo de mola (preenchida por Cloth.build_neighborhoods).
         self.neighbors = {}

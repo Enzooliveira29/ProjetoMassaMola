@@ -412,14 +412,135 @@ Numeros "cheios" (malha grande):
 
 
 --------------------------------------------------------------------
-7. ARQUIVOS DO PROJETO E COMO RODAR
+7. O METODO IMPLICITO DE EULER (KANG E CHO) + PARAMETROS DA DISSERTACAO
 --------------------------------------------------------------------
 
-  vertex.py     -> o vertice (massa, posicao, forcas separadas, tipo)
-  spring.py     -> a mola (forca elastica + amortecimento, 3 tipos)
-  cloth.py      -> a malha (monta, calcula forcas, integra no tempo)
-  main.py       -> demonstracao no terminal
-  visualize.py  -> animacao do tecido
+Esta etapa segue a dissertacao de referencia (Carvalho, 2012). Foram
+feitas TRES coisas:
+  (A) montar o cenario da "Simulacao 1" (a Figura 5.1 da dissertacao);
+  (B) usar TODOS os parametros fisicos da Tabela 5.1;
+  (C) implementar o Euler IMPLICITO resolvido pelo metodo de Kang e
+      Cho (Secao 4.2.2.1).
+
+....................................................................
+(A) O CENARIO DA SIMULACAO 1 (Figura 5.1)
+....................................................................
+  Um tecido quadrado de 2 m x 2 m, na HORIZONTAL, dividido numa grade
+  10x10. Ele e preso em DOIS CANTOS DO MESMO LADO (a aresta do topo:
+  (0,0) e (0,9)) e cai SO pela gravidade. Agora o eixo vertical e o Z
+  (a gravidade aponta para -Z) e o pano comeca deitado no plano XY.
+
+  --- codigo: cloth.py (build_grid) ---
+
+      GRAVITY = np.array([0.0, 0.0, -9.81])   # cai em -Z (na horizontal)
+      # ...
+      position = [j * spacing, i * spacing, 0.0]   # deitado no plano XY
+      fixed = (i, j) in fixed_points               # 2 cantos do mesmo lado
+
+  O espacamento sai do tamanho real: 2 m divididos em 9 intervalos
+  (10 pontos por lado) = 0,2222 m entre vertices.
+
+....................................................................
+(B) OS PARAMETROS DA TABELA 5.1 (a professora pediu "todos")
+....................................................................
+  Antes o projeto usava UM valor de rigidez (k=400) e UM de
+  amortecimento para todas as molas. Agora cada TIPO de mola tem o seu,
+  exatamente como na Tabela 5.1:
+
+  --- codigo: cloth.py ---
+
+      STIFFNESS_BY_TYPE = {STRUCTURAL: 2000.0, SHEAR: 100.0, BENDING: 0.001}
+      DAMPING_BY_TYPE   = {STRUCTURAL: 2.0,    SHEAR: 1.0,   BENDING: 0.001}
+      AIR_DRAG_BY_TIPO  = {"canto": 0.005, "borda": 0.01, "interno": 0.02}
+      DENSITY = 2050.0     # rho (kg/m^3)
+      THICKNESS = 0.0001   # epsilon (m)
+
+  - RIGIDEZ aumentada para 2000 N/m nas molas estruturais: o pano fica
+    FIRME (estica so ~1,3%, em vez de parecer borracha). E a estrategia
+    da Secao 4.3 da dissertacao contra a "superelasticidade".
+  - A MASSA de cada vertice agora vem da AREA dele (Eqs. 4.7-4.8):
+        massa = densidade * espessura * area_de_influencia
+    A massa total bate certinho: 2050 * 0,0001 * (2x2) = 0,82 kg.
+  - RESISTENCIA DO AR (nova forca externa, Eq. 4.5): f = -C^res * v.
+    Cada vertice tem o seu C^res conforme o tipo (canto/borda/interno).
+
+  --- codigo: cloth.py (compute_forces) ---
+
+      vertex.forces["gravidade"] += GRAVITY * vertex.mass
+      vertex.forces["ar"]        += -vertex.air_drag * vertex.velocity
+
+....................................................................
+(C) O EULER IMPLICITO DE KANG E CHO (Secao 4.2.2.1)
+....................................................................
+  LEMBRETE: o Euler EXPLICITO usa as forcas do instante ATUAL para dar
+  o passo. O problema (secao 5) e que ele "explode" se o passo dt for
+  grande ou as molas muito duras.
+
+  O Euler IMPLICITO usa as forcas do PROXIMO instante. Isso o deixa
+  muito mais estavel, mas cria um problema: para achar a forca futura
+  eu preciso da posicao futura, que e justamente o que quero descobrir.
+  A saida (expansao de Taylor, Eq. 4.22) transforma o passo num SISTEMA
+  LINEAR (Eq. 4.25):
+
+      (M - dt^2 * df/dx - dt * df/dv) * dv = dt * (f + dt * df/dx * v)
+
+  onde "dv" e a variacao de velocidade que procuramos, e df/dx e df/dv
+  sao as "Jacobianas" (o quanto a forca muda quando a posicao/velocidade
+  mudam um pouquinho). Para as molas, elas tem formula fechada:
+
+  --- codigo: spring.py (jacobians) -- Eqs. 4.33 a 4.35 ---
+
+      d = self.v1.position - self.v2.position;  r = ||d||
+      outer = (d d^T) / r^2
+      J = k   * (I3 - (L/r) * (I3 - outer))    # df/dx  (rigidez)
+      D = k^d * outer                          # df/dv  (amortecimento)
+
+  A SACADA DE KANG E CHO: em vez de resolver o sistema gigante de uma
+  vez, eles o quebram em m equacoes 3x3 (UMA por particula) e resolvem
+  pelo metodo iterativo de Jacobi. E mostraram que UMA UNICA ITERACAO
+  ja da um resultado estavel e bonito (Eq. 4.31). E isso que o codigo
+  faz, em 4 passos:
+
+  --- codigo: cloth.py (integrate_kangcho) ---
+
+      # 1) bloco diagonal A_ii e lado direito b_i, por particula
+      A[i]      = m_i*I + dt*C^res_i*I + soma_molas(dt^2*J + dt*D)
+      f~_i      = f_i + dt * soma_molas( J * (v_vizinho - v_i) )
+      b_i       = dt * f~_i
+      # 2) estimativa inicial (resolve so a diagonal)
+      p_i       = solve(A[i], b_i)
+      # 3) UMA iteracao de Jacobi (puxa a influencia dos vizinhos)
+      dv_i      = solve(A[i], b_i + soma_molas((dt^2*J + dt*D) * p_vizinho))
+      # 4) atualiza
+      v_i = v_i + dv_i ;   x_i = x_i + dt * v_i
+
+  (solve = np.linalg.solve, que resolve um sisteminha 3x3. Os cantos
+  presos nao se mexem: dv = 0.)
+
+....................................................................
+POR QUE VALEU A PENA? (a prova do teste)
+....................................................................
+  No MESMO passo dt = 0,002 s:
+    - Euler EXPLICITO  -> EXPLODE em t ~ 0,094 s (vira infinito);
+    - Kang e Cho       -> ESTAVEL, o pano cai e assenta numa boa.
+  O explicito so fica estavel com dt = 0,0002 s (10x menor). E
+  exatamente a diferenca de passo que a dissertacao usa (Tabela 5.x:
+  explicito 0,0002 s x implicito 0,002 s). Ou seja: o metodo implicito
+  permite dar passos 10x maiores sem estourar.
+
+
+--------------------------------------------------------------------
+8. ARQUIVOS DO PROJETO E COMO RODAR
+--------------------------------------------------------------------
+
+  vertex.py     -> o vertice (massa, posicao, forcas separadas, tipo,
+                   arrasto do ar)
+  spring.py     -> a mola (forca elastica + amortecimento, 3 tipos) e
+                   as Jacobianas do metodo implicito
+  cloth.py      -> a malha (monta, calcula forcas, integra no tempo:
+                   explicito / semi / kangcho) + parametros da Tab. 5.1
+  main.py       -> demonstracao no terminal (parametros + forcas)
+  visualize.py  -> animacao 3D do tecido
   planilha.py   -> gera e mostra a planilha de vizinhanca
 
 Para rodar:
@@ -427,9 +548,9 @@ Para rodar:
   pip install -r requirements.txt   (instala numpy e matplotlib)
 
   python main.py                 -> numeros no terminal + gera o CSV
-  python visualize.py            -> animacao do tecido
-  python visualize.py forces     -> animacao COM as setas de forca
-  python visualize.py semi       -> usa o Euler semi-implicito
+  python visualize.py            -> animacao 3D - Kang e Cho (dt=0,002)
+  python visualize.py explicito  -> animacao 3D - Euler explicito (dt=0,0002)
+  python visualize.py semi       -> animacao 3D - Euler semi-implicito
   python planilha.py             -> gera a planilha + as imagens
 
 ====================================================================

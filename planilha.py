@@ -29,7 +29,7 @@ ROWS = int(sys.argv[1]) if len(sys.argv) > 1 else 10
 COLS = int(sys.argv[2]) if len(sys.argv) > 2 else 10
 
 cloth = Cloth()
-cloth.build_grid(ROWS, COLS, spacing=1.0)
+cloth.build_grid(ROWS, COLS)  # so a vizinhanca importa aqui; geometria e indiferente
 csv_path = cloth.export_reference_table("vizinhanca.csv")
 
 TIPO_COR = {"interno": "#4a90d9", "borda": "#ff9f40", "canto": "#d94a4a"}
